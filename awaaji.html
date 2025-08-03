@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Awaaji Properties</title>
+  <!-- Tailwind CSS CDN for styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PapaParse CDN for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+  <!-- Font Awesome for icons (bed, bath, ruler, play) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <style>
+    /* Custom styles for better visual appeal and responsiveness */
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .property-card {
+      transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    }
+    .property-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+    }
+    .search-input {
+      border-color: #d1d5db; /* Light gray border */
+    }
+    .search-input:focus {
+      outline: none;
+      border-color: #3b82f6; /* Blue focus ring */
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+    }
+    .button-primary {
+      background-color: #22c55e; /* Green-500 */
+      color: white;
+      padding: 0.75rem 1.5rem;
+      border-radius: 9999px; /* Full rounded */
+      transition: background-color 0.2s ease-in-out;
+    }
+    .button-primary:hover {
+      background-color: #16a34a; /* Green-600 */
+    }
+    .button-secondary {
+      color: #4b5563; /* Gray-700 */
+      padding: 0.75rem 1.5rem;
+      border-radius: 9999px;
+      transition: color 0.2s ease-in-out;
+    }
+    .button-secondary:hover {
+      color: #1f2937; /* Gray-900 */
+    }
+    .loading-spinner {
+      border: 4px solid rgba(0, 0, 0, 0.1);
+      border-left-color: #22c55e;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .error-box {
+      border-left: 4px solid #ef4444; /* Red-500 */
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+  <!-- Header Section -->
+  <header class="bg-white shadow p-4 flex flex-col md:flex-row items-center justify-between sticky top-0 z-10">
+    <h1 class="text-3xl font-extrabold text-gray-800 mb-4 md:mb-0">Awaaji Properties</h1>
+    <nav class="flex flex-wrap justify-center gap-4">
+      <button class="button-primary">Buy</button>
+      <button class="button-secondary">Rent</button>
+      <button class="button-secondary">Sell</button>
+      <button class="button-secondary">Find Agent</button>
+    </nav>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="flex-grow p-6 max-w-7xl mx-auto w-full">
+    <!-- Search Section -->
+    <div class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <input type="text" id="locationSearch" placeholder="Search by location, type, or code..." class="search-input w-full md:w-1/3 px-4 py-2 border rounded-full shadow-sm text-gray-700 focus:ring-2 focus:ring-blue-300" />
+    </div>
+
+    <!-- Property Grid -->
+    <div id="propertyGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+      <!-- Property cards will be dynamically injected here by JavaScript -->
+      <div class="col-span-full text-center p-8 text-gray-500">
+        <span class="loading-spinner"></span>
+        <p class="text-lg mb-4 inline-block align-middle">Loading properties from Google Sheet...</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- JavaScript for dynamic rendering and Gemini API features -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const propertyGrid = document.getElementById('propertyGrid');
+      const locationSearchInput = document.getElementById('locationSearch');
+      let allProperties = []; // Store all properties after parsing
+      let headerMapping = {}; // Store the AI-generated header mapping
+
+      // *** IMPORTANT: This is the Google Sheet published CSV URL. ***
+      const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSVJJsbuqBe4pK7GytZqhlF5DKnr55_VU2l64s8B6vMlBVz7Tj3kaPodjydqew-PwtoFGsR_7a7EoUz/pub?gid=937413264&single=true&output=csv';
+
+      // Helper function to get property value using the AI-generated header mapping
+      function getPropertyValue(property, key, defaultValue = 'N/A') {
+        const mappedKey = headerMapping[key];
+        if (mappedKey && property[mappedKey] !== undefined && property[mappedKey] !== null && String(property[mappedKey]).trim() !== '') {
+          return property[mappedKey];
+        }
+        return defaultValue;
+      }
+
+      // Helper function to convert base64 PCM audio data to a playable WAV Blob
+      function base64ToArrayBuffer(base64) {
+        const binaryString = window.atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+      }
+
+      function pcmToWav(pcmData, sampleRate) {
+        const pcm16 = pcmData;
+        const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+        const view = new DataView(buffer);
+        let pos = 0;
+
+        function writeString(s) {
+          for (let i = 0; i < s.length; i++) {
+            view.setUint8(pos++, s.charCodeAt(i));
+          }
+        }
+
+        function writeUint32(n) {
+          view.setUint32(pos, n, true);
+          pos += 4;
+        }
+
+        function writeUint16(n) {
+          view.setUint16(pos, n, true);
+          pos += 2;
+        }
+
+        writeString('RIFF'); // ChunkID
+        writeUint32(36 + pcm16.length * 2); // ChunkSize
+        writeString('WAVE'); // Format
+        writeString('fmt '); // Subchunk1ID
+        writeUint32(16); // Subchunk1Size
+        writeUint16(1); // AudioFormat (1=PCM)
+        writeUint16(1); // NumChannels
+        writeUint32(sampleRate); // SampleRate
+        writeUint32(sampleRate * 2); // ByteRate
+        writeUint16(2); // BlockAlign
+        writeUint16(16); // BitsPerSample
+        writeString('data'); // Subchunk2ID
+        writeUint32(pcm16.length * 2); // Subchunk2Size
+
+        for (let i = 0; i < pcm16.length; i++) {
+          view.setInt16(pos, pcm16[i], true);
+          pos += 2;
+        }
+
+        return new Blob([view], { type: 'audio/wav' });
+      }
+
+      // Gemini API call for generating a property description
+      async function generatePropertyDescription(property, cardBodyElement) {
+        const apiKey = "AIzaSyAxm4IyNVVXGXYEctudqhC33xccOmZk7kM";
+        const prompt = `You are a professional real estate agent. Write a compelling and attractive property listing description for a property with the following details: 
+        Location: ${getPropertyValue(property, 'locationKey')},
+        Type: ${getPropertyValue(property, 'typeKey')},
+        Rooms: ${getPropertyValue(property, 'roomsKey')},
+        Bathrooms: ${getPropertyValue(property, 'bathroomsKey')},
+        Size: ${getPropertyValue(property, 'sizeKey')},
+        Rental Price: ${getPropertyValue(property, 'rentKey')}.
+        Highlight its features: ${getPropertyValue(property, 'featuresKey')}.
+        Keep it to 2-3 short paragraphs.`;
+        
+        cardBodyElement.innerHTML = `<p class="text-gray-500 text-sm italic">
+          <span class="loading-spinner w-4 h-4 mr-2"></span>Generating description...</p>`;
+
+        try {
+            const chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+            const payload = { contents: chatHistory };
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            
+            if (text) {
+                cardBodyElement.innerHTML = `
+                <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <p class="text-gray-700 text-sm">${text}</p>
+                    <button class="mt-2 text-green-600 hover:text-green-800 text-sm font-semibold" onclick="playDescriptionAudio(this)">
+                        <i class="fas fa-volume-up mr-1"></i> Play
+                    </button>
+                </div>
+                `;
+            } else {
+                cardBodyElement.innerHTML = `<p class="text-red-500 text-sm mt-2">Error generating description. Please try again.</p>`;
+            }
+
+        } catch (error) {
+            console.error('Error with Gemini API:', error);
+            cardBodyElement.innerHTML = `<p class="text-red-500 text-sm mt-2">An error occurred. Check the console for details.</p>`;
+        }
+      }
+
+      // Gemini API call for Text-to-Speech
+      async function playDescriptionAudio(button) {
+        const apiKey = "";
+        const text = button.previousElementSibling.innerText; // Get the text from the paragraph above the button
+        button.innerHTML = `<span class="loading-spinner w-4 h-4 mr-2"></span>Loading Audio...`;
+        button.disabled = true;
+
+        try {
+            const payload = {
+                contents: [{
+                    parts: [{ text: text }]
+                }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: "Algieba" }
+                        }
+                    }
+                },
+                model: "gemini-2.5-flash-preview-tts"
+            };
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            const part = result?.candidates?.[0]?.content?.parts?.[0];
+            const audioData = part?.inlineData?.data;
+            const mimeType = part?.inlineData?.mimeType;
+            
+            if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 16000;
+                const pcmData = base64ToArrayBuffer(audioData);
+                const pcm16 = new Int16Array(pcmData);
+                const wavBlob = pcmToWav(pcm16, sampleRate);
+                const audioUrl = URL.createObjectURL(wavBlob);
+                
+                const audio = new Audio(audioUrl);
+                audio.play();
+
+                audio.onended = () => {
+                    URL.revokeObjectURL(audioUrl);
+                    button.innerHTML = `<i class="fas fa-volume-up mr-1"></i> Play`;
+                    button.disabled = false;
+                };
+            } else {
+                console.error('TTS API response was malformed:', result);
+                button.innerHTML = `<i class="fas fa-volume-up mr-1"></i> Play`;
+                button.disabled = false;
+            }
+
+        } catch (error) {
+            console.error('Error with TTS API:', error);
+            button.innerHTML = `<i class="fas fa-volume-up mr-1"></i> Play`;
+            button.disabled = false;
+        }
+      }
+
+      window.playDescriptionAudio = playDescriptionAudio; // Make the function globally accessible
+      window.generatePropertyDescription = generatePropertyDescription; // Make the function globally accessible
+
+      // Function to render property cards
+      function renderProperties(propertiesToRender) {
+        propertyGrid.innerHTML = ''; // Clear existing cards
+
+        if (propertiesToRender.length === 0) {
+          propertyGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">No properties found matching your criteria.</p>';
+          return;
+        }
+
+        const placeholderImageUrl = 'https://placehold.co/400x250/E0E0E0/808080?text=No+Image';
+
+        propertiesToRender.forEach(property => {
+          const propertyCode = getPropertyValue(property, 'nameKey');
+          
+          if (propertyCode === 'N/A' || String(propertyCode).toUpperCase().includes('PROPERTY LISTINGS RECORD')) {
+            return;
+          }
+
+          const type = getPropertyValue(property, 'typeKey');
+          const location = getPropertyValue(property, 'locationKey');
+          
+          let size = getPropertyValue(property, 'sizeKey');
+          if (typeof size === 'string' && size.match(/\d/)) {
+              size = size.replace(/[^0-9.]/g, '') + ' sqm';
+          } else if (typeof size === 'number') {
+              size = size + ' sqm';
+          }
+          
+          const rooms = getPropertyValue(property, 'roomsKey');
+          const bathrooms = getPropertyValue(property, 'bathroomsKey');
+          const rent = getPropertyValue(property, 'rentKey', null);
+          const status = String(getPropertyValue(property, 'statusKey'));
+          const features = getPropertyValue(property, 'featuresKey', '');
+          
+          const imageUrl = getPropertyValue(property, 'imagesKey', '');
+          const finalImageUrl = imageUrl && imageUrl.trim() !== '' 
+                                ? imageUrl.split(',')[0].trim() // Use the first image if there are multiple
+                                : placeholderImageUrl;
+
+          const rentValue = parseFloat(String(rent).replace(/[^0-9.-]+/g,""));
+          const rentDisplay = !isNaN(rentValue) ? `$${rentValue.toLocaleString()}` : 'Price N/A';
+          const statusColorClass = status.toLowerCase().includes('available') || status.toLowerCase().includes('now') || status.toLowerCase().includes('avaible') ? 'text-green-600' : 'text-red-600';
+
+          const propertyCardHTML = `
+            <div class="bg-white rounded-xl shadow-lg overflow-hidden property-card">
+              <img src="${finalImageUrl}" alt="${type} - ${location}" class="w-full h-48 object-cover" onerror="this.onerror=null;this.src='${placeholderImageUrl}';">
+              <div class="p-4">
+                <div class="flex justify-between items-baseline mb-2">
+                  <h3 class="text-xl font-bold text-gray-900">${type}</h3>
+                  <span class="text-lg font-semibold text-green-600">${rentDisplay}</span>
+                </div>
+                <p class="text-gray-600 text-sm mb-2">${location} - ${propertyCode}</p>
+                <div class="flex items-center text-gray-500 text-sm mb-3">
+                  <span class="mr-3 flex items-center"><i class="fas fa-bed mr-1"></i> ${rooms} Beds</span>
+                  <span class="mr-3 flex items-center"><i class="fas fa-bath mr-1"></i> ${bathrooms} Baths</span>
+                  <span class="flex items-center"><i class="fas fa-ruler-combined mr-1"></i> ${size}</span>
+                </div>
+                <div class="text-gray-700 text-sm mb-4">
+                  <strong>Status:</strong> <span class="font-medium ${statusColorClass}">${status}</span>
+                </div>
+                ${features ? `<p class="text-gray-600 text-xs mt-2">Features: ${features}</p>` : ''}
+                
+                <!-- Gemini API powered Description Section -->
+                <div id="description-container-${propertyCode}" class="mt-4">
+                    <button onclick="generatePropertyDescription(this.dataset.property, document.getElementById('description-container-${propertyCode}'))" 
+                            class="button-primary text-sm px-4 py-2" data-property='${JSON.stringify(property)}'>
+                        ✨ Generate Description
+                    </button>
+                </div>
+
+              </div>
+            </div>
+          `;
+          propertyGrid.innerHTML += propertyCardHTML;
+        });
+      }
+
+      // Function to display an error message on the page
+      function displayError(message) {
+        propertyGrid.innerHTML = `
+          <div class="col-span-full text-left p-6 bg-red-100 text-red-700 rounded-xl shadow-md error-box">
+            <h2 class="font-bold text-xl mb-2">Error Loading Properties</h2>
+            <p class="mb-4">${message}</p>
+            <p>Please check your Google Sheet URL and ensure the sheet is correctly published as a CSV.</p>
+            <p class="mt-4 text-sm text-gray-600">For more details, check your browser's Developer Console (press F12).</p>
+          </div>
+        `;
+      }
+      
+      // Gemini API call to analyze spreadsheet headers
+      async function analyzeHeaders(headers) {
+          const apiKey = " ";
+          const prompt = `Analyze the following spreadsheet headers and map them to the correct real estate property fields. Respond with a JSON object where the keys are the standard fields and the values are the exact header names from the input.
+          
+          Required fields to map:
+          - property name (can be a code or name)
+          - type of property (e.g., flat, villa)
+          - rental price (monthly price)
+          - location (city or neighborhood)
+          - size (sqm or number of rooms)
+          - number of rooms
+          - bathrooms
+          - images (URLs)
+          - status (e.g., available, rented)
+          - special features (amenities or special notes)
+
+          Input Headers: ${JSON.stringify(headers)}
+
+          Example Response:
+          {
+            "nameKey": "Name",
+            "typeKey": "Type of Property",
+            "rentKey": "Rental Price",
+            "locationKey": "Location",
+            "sizeKey": "Size (sqm or rooms)",
+            "roomsKey": "Number of Rooms",
+            "bathroomsKey": "Bathrooms",
+            "imagesKey": "Images",
+            "statusKey": "Status",
+            "featuresKey": "Features"
+          }
+          `;
+
+          const payload = {
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                      nameKey: { type: "STRING" },
+                      typeKey: { type: "STRING" },
+                      rentKey: { type: "STRING" },
+                      locationKey: { type: "STRING" },
+                      sizeKey: { type: "STRING" },
+                      roomsKey: { type: "STRING" },
+                      bathroomsKey: { type: "STRING" },
+                      imagesKey: { type: "STRING" },
+                      statusKey: { type: "STRING" },
+                      featuresKey: { type: "STRING" }
+                    },
+                    "propertyOrdering": ["nameKey", "typeKey", "rentKey", "locationKey", "sizeKey", "roomsKey", "bathroomsKey", "imagesKey", "statusKey", "featuresKey"]
+                  }
+              }
+          };
+          const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+          try {
+              const response = await fetch(apiUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+              });
+              const result = await response.json();
+              const json = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+              return JSON.parse(json);
+          } catch (error) {
+              console.error('Error with Gemini API for header analysis:', error);
+              return null;
+          }
+      }
+      
+      // Function to fetch and parse CSV from Google Sheet
+      async function fetchAndParseGoogleSheet() {
+        propertyGrid.innerHTML = `
+          <div class="col-span-full text-center p-8 text-gray-500">
+            <span class="loading-spinner"></span>
+            <p class="text-lg mb-4 inline-block align-middle">Loading properties from Google Sheet...</p>
+          </div>
+        `;
+
+        try {
+            const response = await fetch(GOOGLE_SHEET_CSV_URL);
+            const csvText = await response.text();
+
+            Papa.parse(csvText, {
+              header: true,
+              dynamicTyping: true,
+              skipEmptyLines: true,
+              complete: async function(results) {
+                if (results.data.length === 0 || results.errors.length > 0) {
+                  displayError('No data could be retrieved or parsed from the Google Sheet.');
+                  return;
+                }
+
+                // Get headers from the parsed data
+                const rawHeaders = Object.keys(results.data[0]);
+                
+                // Use Gemini API to analyze the headers
+                const analysisContainer = document.createElement('div');
+                analysisContainer.className = "col-span-full text-center p-8 text-gray-500";
+                analysisContainer.innerHTML = `<span class="loading-spinner"></span><p class="text-lg mb-4 inline-block align-middle">Analyzing spreadsheet headers with AI...</p>`;
+                propertyGrid.innerHTML = '';
+                propertyGrid.appendChild(analysisContainer);
+                
+                headerMapping = await analyzeHeaders(rawHeaders);
+                
+                if (!headerMapping) {
+                    displayError('AI could not analyze the headers. Please check the API key and try again.');
+                    return;
+                }
+                
+                allProperties = results.data.filter(row => {
+                  const rowValues = Object.values(row);
+                  const isRowEmpty = rowValues.every(x => x === null || String(x).trim() === '');
+                  const propertyCodeVal = getPropertyValue(row, 'nameKey', '');
+                  const isHeaderRow = String(propertyCodeVal).toUpperCase().includes('PROPERTY LISTINGS RECORD') || String(propertyCodeVal).toUpperCase().includes('PROPERTY NAME / CODE');
+                  return !isRowEmpty && !isHeaderRow;
+                });
+                
+                if (allProperties.length === 0) {
+                    displayError('After filtering, no valid property data was found. Please ensure your Google Sheet has actual property listings with correct headers.');
+                    return;
+                }
+                renderProperties(allProperties);
+              },
+              error: function(err, file, inputElem, reason) {
+                displayError(`Error loading properties: ${reason}.`);
+              }
+            });
+        } catch (error) {
+            displayError(`Failed to fetch the spreadsheet: ${error.message}. Please ensure the URL is correct and the sheet is publicly published.`);
+            console.error(error);
+        }
+      }
+
+      // Event listener for location search input (filters properties in real-time)
+      locationSearchInput.addEventListener('keyup', function(e) {
+        const searchTerm = e.target.value.toLowerCase();
+        const filteredProperties = allProperties.filter(property => {
+          const location = String(getPropertyValue(property, 'locationKey', '')).toLowerCase();
+          const type = String(getPropertyValue(property, 'typeKey', '')).toLowerCase();
+          const features = String(getPropertyValue(property, 'featuresKey', '')).toLowerCase();
+          const propertyCode = String(getPropertyValue(property, 'nameKey', '')).toLowerCase();
+          const rooms = String(getPropertyValue(property, 'roomsKey', '')).toLowerCase();
+          const bathrooms = String(getPropertyValue(property, 'bathroomsKey', '')).toLowerCase();
+          const rent = String(getPropertyValue(property, 'rentKey', '')).toLowerCase();
+          const status = String(getPropertyValue(property, 'statusKey', '')).toLowerCase();
+
+          return location.includes(searchTerm) || 
+                 type.includes(searchTerm) || 
+                 features.includes(searchTerm) || 
+                 propertyCode.includes(searchTerm) ||
+                 rooms.includes(searchTerm) ||
+                 bathrooms.includes(searchTerm) ||
+                 rent.includes(searchTerm) ||
+                 status.includes(searchTerm);
+        });
+        renderProperties(filteredProperties);
+      });
+
+      fetchAndParseGoogleSheet();
+    });
+  </script>
+</body>
+</html>
